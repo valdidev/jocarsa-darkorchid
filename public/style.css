@@ -13,7 +13,10 @@ html, body {
   background: linear-gradient(to bottom right, #2c3e50, #34495e);
   color: #333;
 }
-
+body {
+  display: flex;
+  flex-direction: row; /* So the left pane is on the left, right pane is on the right */
+}
 /* Main layout: left pane (chat + attendants), right pane (video) */
 #left-pane {
   width: 320px;
