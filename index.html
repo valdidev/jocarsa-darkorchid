@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Single-File WebRTC Example</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: row;
+      height: 100vh;
+    }
+    #chat-container {
+      width: 300px;
+      border-right: 1px solid #ccc;
+      padding: 10px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+    }
+    #video-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    #localVideo, #remoteVideo {
+      width: 40%;
+      margin: 0 5px;
+      background: #000;
+    }
+    #chat-messages {
+      flex: 1;
+      border: 1px solid #aaa;
+      margin-bottom: 10px;
+      overflow: auto;
+      padding: 5px;
+    }
+    #login {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      border: 1px solid #ccc;
+      padding: 20px;
+      background: #fff;
+    }
+    #offerContainer, #answerContainer {
+      margin: 5px 0;
+    }
+    textarea {
+      width: 100%;
+      height: 100px;
+    }
+    button {
+      margin: 5px 0;
+    }
+    #copypaste-signal {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="chat-container">
+  <div id="chat-messages"></div>
+  <input type="text" id="chat-input" placeholder="Type a message..."/>
+  <button id="send-chat">Send</button>
+</div>
+
+<div id="video-container">
+  <video id="localVideo" playsinline autoplay muted></video>
+  <video id="remoteVideo" playsinline autoplay></video>
+</div>
+
+<div id="login">
+  <h2>Login</h2>
+  <label for="nameField">Your Name:</label>
+  <input type="text" id="nameField"/><br><br>
+
+  <label>
+    <input type="radio" name="role" value="teacher" checked> Teacher
+  </label>
+  <label>
+    <input type="radio" name="role" value="student"> Student
+  </label>
+  <br><br>
+
+  <button id="startBtn">Start</button>
+</div>
+
+<div id="copypaste-signal" style="display:none">
+  <h3 id="signalTitle">Signal Exchange</h3>
+
+  <div id="offerContainer">
+    <label for="offerOut">Offer (copy this)</label><br>
+    <textarea id="offerOut" readonly></textarea><br>
+    <label for="offerIn">Paste remote offer here</label><br>
+    <textarea id="offerIn"></textarea><br>
+    <button id="receiveOfferBtn">Receive Offer</button>
+  </div>
+
+  <div id="answerContainer">
+    <label for="answerOut">Answer (copy this)</label><br>
+    <textarea id="answerOut" readonly></textarea><br>
+    <label for="answerIn">Paste remote answer here</label><br>
+    <textarea id="answerIn"></textarea><br>
+    <button id="receiveAnswerBtn">Receive Answer</button>
+  </div>
+</div>
+
+<script>
+  const loginDiv       = document.getElementById('login');
+  const startBtn       = document.getElementById('startBtn');
+  const nameField      = document.getElementById('nameField');
+  const roleRadio      = document.getElementsByName('role');
+
+  const localVideo     = document.getElementById('localVideo');
+  const remoteVideo    = document.getElementById('remoteVideo');
+
+  const chatMessages   = document.getElementById('chat-messages');
+  const chatInput      = document.getElementById('chat-input');
+  const sendChatBtn    = document.getElementById('send-chat');
+
+  const copypasteDiv   = document.getElementById('copypaste-signal');
+  const signalTitle    = document.getElementById('signalTitle');
+
+  const offerContainer = document.getElementById('offerContainer');
+  const answerContainer= document.getElementById('answerContainer');
+  const offerOut       = document.getElementById('offerOut');
+  const offerIn        = document.getElementById('offerIn');
+  const receiveOfferBtn= document.getElementById('receiveOfferBtn');
+  const answerOut      = document.getElementById('answerOut');
+  const answerIn       = document.getElementById('answerIn');
+  const receiveAnswerBtn= document.getElementById('receiveAnswerBtn');
+
+  let role       = 'teacher';
+  let userName   = '';
+  let pc         = null;     // RTCPeerConnection
+  let dataChannel= null;     // RTCDataChannel
+
+  // Google STUN servers
+  const config = {
+    iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' }
+    ]
+  };
+
+  // --- Set up event handlers for login ---
+  startBtn.onclick = async () => {
+    userName = nameField.value.trim() || 'Anonymous';
+    for (let r of roleRadio) {
+      if (r.checked) {
+        role = r.value;
+      }
+    }
+    loginDiv.style.display = 'none';
+
+    // After the user chooses role, start
+    if (role === 'teacher') {
+      signalTitle.innerText = "Teacher - Offer/Answer Exchange";
+      offerContainer.style.display  = 'block';
+      answerContainer.style.display = 'block';
+      copypasteDiv.style.display    = 'block';
+      await startTeacher();
+    } else {
+      signalTitle.innerText = "Student - Offer/Answer Exchange";
+      offerContainer.style.display  = 'block';
+      answerContainer.style.display = 'block';
+      copypasteDiv.style.display    = 'block';
+      await startStudent();
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Teacher flow: capture screen + cam + mic, create peer, datachannel
+  // -------------------------------------------------------------
+  async function startTeacher() {
+    try {
+      // Create RTCPeerConnection
+      pc = new RTCPeerConnection(config);
+
+      // Create data channel for chat
+      dataChannel = pc.createDataChannel('chatChannel');
+      setupDataChannel(dataChannel);
+
+      // Get screen
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      // Get camera
+      const camStream = await navigator.mediaDevices.getUserMedia({ video: true });
+      // Get mic
+      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+      // Combine all tracks into one stream for local preview (optional)
+      // Alternatively, you can just show screen or cam as "localVideo".
+      const combinedStream = new MediaStream();
+      screenStream.getTracks().forEach(t => combinedStream.addTrack(t));
+      camStream.getVideoTracks().forEach(t => combinedStream.addTrack(t));
+      micStream.getTracks().forEach(t => combinedStream.addTrack(t));
+
+      // Show local preview
+      localVideo.srcObject = combinedStream;
+
+      // Add all tracks to the peer connection
+      screenStream.getTracks().forEach(track => pc.addTrack(track, screenStream));
+      camStream.getVideoTracks().forEach(track => pc.addTrack(track, camStream));
+      micStream.getTracks().forEach(track => pc.addTrack(track, micStream));
+
+      // On ice candidate
+      pc.onicecandidate = event => {
+        if (event.candidate) {
+          // In real app, send candidate to remote
+        }
+      };
+
+      // On track from remote
+      pc.ontrack = event => {
+        // The Student’s stream(s) will appear here
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      // Create offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      offerOut.value = JSON.stringify(pc.localDescription);
+    } catch (err) {
+      console.error('Error starting teacher:', err);
+      alert('Error: ' + err);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // Student flow: create peer, wait for teacher’s offer, create answer
+  // -------------------------------------------------------------
+  async function startStudent() {
+    // Create RTCPeerConnection
+    pc = new RTCPeerConnection(config);
+
+    // Student will receive datachannel from teacher
+    pc.ondatachannel = event => {
+      dataChannel = event.channel;
+      setupDataChannel(dataChannel);
+    };
+
+    // On ice candidate
+    pc.onicecandidate = event => {
+      if (event.candidate) {
+        // In real app, send candidate to remote
+      }
+    };
+
+    // On track from teacher
+    pc.ontrack = event => {
+      remoteVideo.srcObject = event.streams[0];
+    };
+
+    // (Optional) – Student might share their own camera/mic if you want
+    // For now, the student only receives.
+  }
+
+  // Handle Teacher receiving the student's Offer (actually in this scenario, the teacher sends the offer)
+  // But let's allow you to paste the teacher's own Offer to the student, and then the Student's answer back to teacher.
+  receiveOfferBtn.onclick = async () => {
+    // If I'm a Student, I receive the teacher's Offer and set remote description
+    if (role === 'student') {
+      const remoteOffer = JSON.parse(offerIn.value);
+      await pc.setRemoteDescription(new RTCSessionDescription(remoteOffer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      answerOut.value = JSON.stringify(pc.localDescription);
+    } else {
+      // If I'm teacher, we do nothing special here – 
+      // in a real app you'd set the student's offer, but this example is teacher->student only.
+      alert("As Teacher, you typically won't receive an Offer from Student in this simple flow.");
+    }
+  };
+
+  receiveAnswerBtn.onclick = async () => {
+    // If I'm the Teacher, I'd receive the Student's Answer
+    if (role === 'teacher') {
+      const remoteAnswer = JSON.parse(answerIn.value);
+      await pc.setRemoteDescription(new RTCSessionDescription(remoteAnswer));
+      // Done, the connection should be established if ICE candidates find a route
+    } else {
+      alert("As Student, you typically won't receive an Answer from Teacher in this simple flow.");
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Setup data channel for text chat
+  // -------------------------------------------------------------
+  function setupDataChannel(dc) {
+    dc.onopen = () => {
+      logChatMessage('System', 'DataChannel opened.');
+    };
+    dc.onmessage = evt => {
+      logChatMessage('Remote', evt.data);
+    };
+    dc.onclose = () => {
+      logChatMessage('System', 'DataChannel closed.');
+    };
+  }
+
+  sendChatBtn.onclick = () => {
+    if (dataChannel && dataChannel.readyState === 'open') {
+      const msg = chatInput.value;
+      chatInput.value = '';
+      dataChannel.send(userName + ': ' + msg);
+      logChatMessage(userName, msg);
+    }
+  };
+
+  // Helper to show chat messages
+  function logChatMessage(who, msg) {
+    chatMessages.value += who + ': ' + msg + '\n';
+    // If using a normal div, create text node or <p>
+    const div = document.createElement('div');
+    div.textContent = who + ': ' + msg;
+    chatMessages.appendChild(div);
+    chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+</script>
+</body>
+</html>
+
