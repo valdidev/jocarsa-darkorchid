@@ -1,21 +1,37 @@
 #!/usr/bin/env node
 
 /*******************************************************************
-  A SINGLE-FILE EXAMPLE:
-    - Node.js HTTP + WebSocket server (for signaling)
+  A SINGLE-FILE SSL EXAMPLE:
+    - Node.js HTTPS + WebSocket server (for signaling)
     - A single HTML/JS client (served at "/")
     - Teacher streams screen+cam+mic to multiple Students via WebRTC
     - Basic text chat via data channel
+
+  HOW TO RUN:
+    1) Place your SSL cert/key in /etc/apache2/ssl or any secure location:
+       - jocarsa_combined.cer  (the cert file)
+       - jocarsa.key           (the private key)
+    2) npm install ws
+    3) node webrtc-teacher-students-ssl.js
+    4) Open https://localhost:3000
+    5) Bypass any certificate warnings if self-signed, or use a valid cert.
 *******************************************************************/
 
-//
-// 1) SERVER CODE (Node + WebSocket for signaling)
-//
-
-const http = require('http');
+const fs = require('fs');
+const https = require('https');
 const WebSocket = require('ws');
 
 const PORT = 3000;
+
+// Replace these paths with where your certificate/key are located:
+const SSL_CERT_PATH = '/etc/apache2/ssl/jocarsa_combined.cer';
+const SSL_KEY_PATH  = '/etc/apache2/ssl/jocarsa.key';
+
+// Read certificate & key
+const sslOptions = {
+  cert: fs.readFileSync(SSL_CERT_PATH),
+  key:  fs.readFileSync(SSL_KEY_PATH),
+};
 
 /**
  * We'll keep a simple in-memory list of connected clients:
@@ -30,9 +46,9 @@ let teacherClient = null;
 let students = [];
 
 /**
- * Create a minimal HTTP server that serves our single-page app.
+ * Create a minimal HTTPS server that serves our single-page app.
  */
-const server = http.createServer((req, res) => {
+const server = https.createServer(sslOptions, (req, res) => {
   if (req.url === '/') {
     // Serve the single HTML page with inline JS
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -40,12 +56,12 @@ const server = http.createServer((req, res) => {
   } else {
     // Not found
     res.writeHead(404);
-    res.end();
+    res.end('Not found');
   }
 });
 
 /**
- * Create a WebSocket server on top of our HTTP server.
+ * Create a WebSocket server on top of our HTTPS server.
  */
 const wss = new WebSocket.Server({ server });
 
@@ -71,9 +87,10 @@ wss.on('connection', (ws) => {
         role = msg.role;
         name = msg.name;
         clientId = generateId();
+
         if (role === 'teacher') {
           console.log(`Teacher joined: ${name}, id=${clientId}`);
-          // If there's already a teacher, we override (or you can refuse).
+          // If there's already a teacher, you might override or handle differently
           teacherClient = { ws, id: clientId, name };
           // Let the teacher know they joined
           ws.send(JSON.stringify({ type: 'joined', role, id: clientId }));
@@ -151,7 +168,7 @@ wss.on('connection', (ws) => {
   ws.on('close', () => {
     console.log(`Client disconnected: role=${role}, id=${clientId}`);
 
-    // If Teacher disconnected, remove
+    // If Teacher disconnected, remove teacher
     if (teacherClient && teacherClient.id === clientId) {
       teacherClient = null;
       // Optionally notify all students that teacher left
@@ -187,24 +204,24 @@ function generateId() {
 }
 
 /**
- * Start the server
+ * Start the HTTPS server
  */
 server.listen(PORT, () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+  console.log(`HTTPS/WebSocket server listening on https://localhost:${PORT}`);
   console.log('Press CTRL+C to stop.');
 });
 
 
 //
 // 2) CLIENT CODE (HTML + inline JavaScript)
-//    This is served at http://localhost:3000/
+//    This is served at https://localhost:3000/
 //
 
 const HTML_PAGE = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>Teacher/Student WebRTC</title>
+  <title>Teacher/Student WebRTC SSL</title>
   <style>
     body {
       margin: 0; padding: 0;
@@ -235,9 +252,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       justify-content: flex-start; padding: 10px; box-sizing: border-box;
     }
     video {
-      width: 300px;
-      margin: 5px;
-      background: #000;
+      width: 300px; margin: 5px; background: #000;
     }
     #loginOverlay {
       position: fixed; top:0; left:0; right:0; bottom:0;
@@ -325,7 +340,7 @@ const HTML_PAGE = `<!DOCTYPE html>
 
   // WebSocket open
   ws.onopen = () => {
-    console.log('WebSocket connected to server.');
+    console.log('WebSocket connected to server (SSL).');
   };
 
   // WebSocket message
@@ -482,8 +497,7 @@ const HTML_PAGE = `<!DOCTYPE html>
       }
     };
 
-    // We (Teacher) don't need to watch ontrack for the Student, but we could
-    // if we wanted to see student's camera. For now, Teacher doesn't watch Student.
+    // We (Teacher) don't need ontrack from the student (unless we want student's camera).
 
     // Create the offer for this student
     pc.createOffer().then((offer) => {
@@ -525,15 +539,13 @@ const HTML_PAGE = `<!DOCTYPE html>
 
     // On track (this is the Teacher’s feed)
     pcTeacher.ontrack = (event) => {
-      // If multiple tracks, they may come in separately. Usually .streams[0] is good.
-      // We can attach them all to a single video, or separate videos if we want.
+      // The teacher's tracks may arrive separately. Usually event.streams[0] is good.
       const remoteVideo = getOrCreateRemoteVideo();
       if (!remoteVideo.srcObject) {
         remoteVideo.srcObject = event.streams[0];
       } else {
         // If needed, add tracks to existing stream
-        let existingStream = remoteVideo.srcObject;
-        existingStream.addTrack(event.track);
+        remoteVideo.srcObject.addTrack(event.track);
       }
     };
 
@@ -566,7 +578,7 @@ const HTML_PAGE = `<!DOCTYPE html>
   function setupDataChannel(dc, studentId) {
     dc.onopen = () => {
       console.log(\`DataChannel open (Teacher->Student \${studentId})\`);
-      // Optionally send a welcome message
+      // Optionally send a welcome
       dc.send(\`\${userName} (Teacher) joined the chat.\`);
     };
     dc.onmessage = (evt) => {
@@ -627,6 +639,8 @@ const HTML_PAGE = `<!DOCTYPE html>
 `;
 
 /*******************************************************************
-  END OF SINGLE-FILE EXAMPLE
+  END OF SINGLE-FILE SSL EXAMPLE
 *******************************************************************/
+
+
 
