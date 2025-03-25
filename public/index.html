@@ -6,8 +6,9 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Left Pane -->
   <div id="left-pane">
-    <!-- Chat on top -->
+    <!-- Chat at top -->
     <div id="chat-container">
       <div id="chat-messages"></div>
       <div id="chat-input-container">
@@ -16,17 +17,19 @@
       </div>
     </div>
 
-    <!-- Attendants list at bottom -->
+    <!-- Attendants at bottom -->
     <div id="attendants-container">
       <h3>Attendants</h3>
       <div id="attendants-list"></div>
     </div>
   </div>
 
-  <!-- Right pane: Full screen button + video(s) -->
+  <!-- Right Pane -->
   <div id="right-pane">
     <button id="fullscreenBtn" title="Toggle Full Screen">[  ]</button>
-    <div id="video-container"><!-- Teacher or Student video(s) here --></div>
+    <div id="video-container">
+      <!-- Teacher's local or remote video appended here -->
+    </div>
   </div>
 
   <!-- Login overlay -->
@@ -34,7 +37,7 @@
     <div id="loginBox">
       <h2>Login</h2>
       <label>Your Name:</label>
-      <input id="nameField" type="text" placeholder="Your name" />
+      <input id="nameField" type="text" placeholder="Your name">
       <div class="role-selection">
         <label><input type="radio" name="role" value="teacher" checked>Teacher</label>
         <label><input type="radio" name="role" value="student">Student</label>
