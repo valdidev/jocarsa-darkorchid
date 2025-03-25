@@ -159,6 +159,7 @@ async function startTeacher() {
     localVideo.autoplay = true;
     localVideo.muted = true;
     localVideo.playsInline = true;
+    localVideo.controls = true;
     localVideo.srcObject = localStream;
     videoContainer.appendChild(localVideo);
 
