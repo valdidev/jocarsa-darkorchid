@@ -1,9 +1,11 @@
 /********************************************************
  * script.js
- * Client-side JS for Teacher/Student WebRTC with chat
+ * Client-side code for Teacher/Student WebRTC with chat,
+ * now with an attendants list and a fullscreen toggle.
  ********************************************************/
 const wsProtocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
-const wsUrl = wsProtocol + window.location.host;
+const wsUrl = wsProtocol + window.location.host; 
+// e.g., wss://jocarsa.com:3000
 const ws = new WebSocket(wsUrl);
 
 // Global state
@@ -24,6 +26,10 @@ const nameField         = document.getElementById('nameField');
 const chatMessagesDiv   = document.getElementById('chat-messages');
 const chatInput         = document.getElementById('chat-input');
 const chatSendBtn       = document.getElementById('chat-send-btn');
+
+const attendantsListDiv = document.getElementById('attendants-list');
+
+const fullscreenBtn     = document.getElementById('fullscreenBtn');
 const videoContainer    = document.getElementById('video-container');
 
 // When user clicks "Login"
@@ -32,7 +38,7 @@ loginBtn.onclick = () => {
   const roleRadio = document.querySelector('input[name="role"]:checked');
   userRole = roleRadio.value;
 
-  // Send "join" message
+  // Send "join"
   ws.send(JSON.stringify({
     type: 'join',
     role: userRole,
@@ -41,7 +47,7 @@ loginBtn.onclick = () => {
 };
 
 ws.onopen = () => {
-  console.log('WebSocket connected.');
+  console.log('WebSocket connected (SSL).');
 };
 
 ws.onmessage = async (event) => {
@@ -65,14 +71,12 @@ ws.onmessage = async (event) => {
 
     case 'student-joined':
       // Teacher side: new student
-      // { type: 'student-joined', studentId, name }
       console.log(`New student joined: ${msg.name} (id=${msg.studentId})`);
       createPeerConnectionForStudent(msg.studentId);
       break;
 
     case 'student-left':
       // Teacher side: remove that student's PC
-      // { type: 'student-left', studentId }
       if (pcStudents[msg.studentId]) {
         pcStudents[msg.studentId].close();
         delete pcStudents[msg.studentId];
@@ -84,14 +88,13 @@ ws.onmessage = async (event) => {
 
     case 'offer':
       // Student side: got an offer from Teacher
-      // { type: 'offer', sdp, studentId }
       if (userRole === 'student') {
         console.log('Received Offer from Teacher');
         await pcTeacher.setRemoteDescription(new RTCSessionDescription(msg.sdp));
         const answer = await pcTeacher.createAnswer();
         await pcTeacher.setLocalDescription(answer);
 
-        // Send answer back
+        // Send back
         ws.send(JSON.stringify({
           type: 'answer',
           studentId: userId,
@@ -101,8 +104,7 @@ ws.onmessage = async (event) => {
       break;
 
     case 'answer':
-      // Teacher side: got answer from a Student
-      // { type: 'answer', studentId, sdp }
+      // Teacher side: got answer from Student
       if (userRole === 'teacher') {
         const pc = pcStudents[msg.studentId];
         if (pc) {
@@ -115,17 +117,20 @@ ws.onmessage = async (event) => {
     case 'ice-candidate':
       // { type: 'ice-candidate', target, studentId, candidate }
       if (msg.target === 'teacher' && userRole === 'teacher') {
-        // Student -> Teacher
         const pc = pcStudents[msg.studentId];
         if (pc && msg.candidate) {
           pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
         }
       } else if (msg.target === 'student' && userRole === 'student') {
-        // Teacher -> Student
         if (pcTeacher && msg.candidate) {
           pcTeacher.addIceCandidate(new RTCIceCandidate(msg.candidate));
         }
       }
+      break;
+
+    case 'attendants-list':
+      // Everyone: update the list of who is in the session
+      displayAttendants(msg.list);
       break;
 
     default:
@@ -143,7 +148,7 @@ async function startTeacher() {
     const camStream    = await navigator.mediaDevices.getUserMedia({ video: true });
     const micStream    = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    // Combine them into localStream
+    // Combine
     localStream = new MediaStream();
     screenStream.getTracks().forEach(t => localStream.addTrack(t));
     camStream.getVideoTracks().forEach(t => localStream.addTrack(t));
@@ -168,17 +173,15 @@ function createPeerConnectionForStudent(studentId) {
   const config = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
   const pc = new RTCPeerConnection(config);
 
-  // Add local tracks
   if (localStream) {
     localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
   }
 
-  // Create a data channel for chat
+  // Data channel
   const dc = pc.createDataChannel('chatChannel');
   dataChannels[studentId] = dc;
   setupDataChannelTeacher(dc, studentId);
 
-  // ICE
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       ws.send(JSON.stringify({
@@ -190,19 +193,16 @@ function createPeerConnectionForStudent(studentId) {
     }
   };
 
-  // No ontrack needed (we don't watch the student's camera).
-
   // Create offer
-  pc.createOffer()
-    .then(offer => {
-      pc.setLocalDescription(offer).then(() => {
-        ws.send(JSON.stringify({
-          type: 'offer',
-          studentId,
-          sdp: pc.localDescription
-        }));
-      });
+  pc.createOffer().then(offer => {
+    pc.setLocalDescription(offer).then(() => {
+      ws.send(JSON.stringify({
+        type: 'offer',
+        studentId,
+        sdp: pc.localDescription
+      }));
     });
+  });
 
   pcStudents[studentId] = pc;
 }
@@ -210,7 +210,6 @@ function createPeerConnectionForStudent(studentId) {
 function setupDataChannelTeacher(dc, studentId) {
   dc.onopen = () => {
     console.log(`DataChannel open (Teacher->Student ${studentId})`);
-    // Send a welcome message
     dc.send(`${userName} (Teacher) joined the chat.`);
   };
   dc.onmessage = (evt) => {
@@ -239,19 +238,17 @@ function startStudent() {
     }
   };
 
-  // On track (teacher's feed)
+  // Teacher's feed
   pcTeacher.ontrack = (event) => {
     const remoteVideo = getOrCreateRemoteVideo();
-    // If no srcObject, set the first stream
     if (!remoteVideo.srcObject) {
       remoteVideo.srcObject = event.streams[0];
     } else {
-      // If needed, add track to existing stream
       remoteVideo.srcObject.addTrack(event.track);
     }
   };
 
-  // On data channel (from teacher)
+  // Data channel from Teacher
   pcTeacher.ondatachannel = (evt) => {
     dataChannelTeacher = evt.channel;
     setupDataChannelStudent(dataChannelTeacher);
@@ -285,15 +282,25 @@ function setupDataChannelStudent(dc) {
 }
 
 /********************************************************
- * Chat UI
+ * Chat UI: send on button or Enter
  ********************************************************/
-chatSendBtn.onclick = () => {
+chatSendBtn.onclick = sendChat;
+
+chatInput.addEventListener('keydown', (e) => {
+  // Press Enter to send
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
+function sendChat() {
   const msg = chatInput.value;
   chatInput.value = '';
   if (!msg.trim()) return;
 
   if (userRole === 'teacher') {
-    // Send to each student
+    // Teacher -> all students
     for (const [stuId, dc] of Object.entries(dataChannels)) {
       if (dc.readyState === 'open') {
         dc.send(`${userName} (Teacher): ${msg}`);
@@ -307,13 +314,38 @@ chatSendBtn.onclick = () => {
     }
     addChatMessage(`${userName} (Student)`, msg);
   }
-};
+}
 
 function addChatMessage(who, text) {
-  console.log(`[CHAT] ${who}: ${text}`);
   const div = document.createElement('div');
   div.textContent = `${who}: ${text}`;
   chatMessagesDiv.appendChild(div);
   chatMessagesDiv.scrollTop = chatMessagesDiv.scrollHeight;
 }
+
+/********************************************************
+ * Attendants List
+ ********************************************************/
+function displayAttendants(list) {
+  attendantsListDiv.innerHTML = '';
+  list.forEach((person) => {
+    const p = document.createElement('p');
+    p.textContent = \`\${person.role.toUpperCase()} – \${person.name}\`;
+    attendantsListDiv.appendChild(p);
+  });
+}
+
+/********************************************************
+ * Fullscreen Button
+ ********************************************************/
+fullscreenBtn.onclick = () => {
+  // Toggle full screen of the #video-container
+  if (!document.fullscreenElement) {
+    videoContainer.requestFullscreen().catch(err => {
+      console.error('Error attempting fullscreen:', err);
+    });
+  } else {
+    document.exitFullscreen();
+  }
+};
 

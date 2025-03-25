@@ -6,6 +6,7 @@
   1) Creates an HTTPS + WebSocket server on https://jocarsa.com:3000
   2) Serves static files from "./public"
   3) Handles Teacher/Student WebRTC signaling
+  4) Broadcasts an attendants list (Teacher + Students) to everyone.
 
   HOW TO RUN:
     1) npm install ws
@@ -13,10 +14,9 @@
     3) Open https://jocarsa.com:3000
 
   Make sure:
-    - Your DNS points jocarsa.com to this server.
+    - DNS points jocarsa.com to this server.
     - You have a valid SSL cert + key for jocarsa.com.
     - Port 3000 is open in your firewall.
-
 *******************************************************************/
 
 const fs = require('fs');
@@ -26,7 +26,9 @@ const WebSocket = require('ws');
 
 /** 
  * Replace these with your actual certificate and key file paths.
- * For example, if you stored them in /etc/apache2/ssl:
+ * Example:
+ *   /etc/apache2/ssl/jocarsa_combined.cer
+ *   /etc/apache2/ssl/jocarsa.key
  */
 const SSL_CERT_PATH = '/etc/apache2/ssl/jocarsa_combined.cer';
 const SSL_KEY_PATH  = '/etc/apache2/ssl/jocarsa.key';
@@ -37,18 +39,17 @@ const sslOptions = {
   key:  fs.readFileSync(SSL_KEY_PATH),
 };
 
-/** 
- * We’ll listen on port 3000.
- * So the URL will be https://jocarsa.com:3000
+/**
+ * We'll listen on port 3000, so the URL is https://jocarsa.com:3000
  */
 const PORT = 3000;
 
-// In-memory store for teacher + students
-let teacherClient = null;
-let students = [];
+// In-memory store for Teacher + Students
+let teacherClient = null; // { ws, id, name, role: 'teacher' }
+let students = [];        // array of { ws, id, name, role: 'student' }
 
 /**
- * Create an HTTPS server that serves static files from "./public"
+ * Create an HTTPS server to serve static files from "./public"
  */
 const server = https.createServer(sslOptions, (req, res) => {
   // If user requests "/", serve index.html
@@ -63,7 +64,6 @@ const server = https.createServer(sslOptions, (req, res) => {
       res.end(data);
     });
   }
-  // If user requests "/style.css"
   else if (req.url === '/style.css') {
     const filePath = path.join(__dirname, 'public', 'style.css');
     fs.readFile(filePath, (err, data) => {
@@ -75,7 +75,6 @@ const server = https.createServer(sslOptions, (req, res) => {
       res.end(data);
     });
   }
-  // If user requests "/script.js"
   else if (req.url === '/script.js') {
     const filePath = path.join(__dirname, 'public', 'script.js');
     fs.readFile(filePath, (err, data) => {
@@ -87,7 +86,6 @@ const server = https.createServer(sslOptions, (req, res) => {
       res.end(data);
     });
   }
-  // Otherwise 404
   else {
     res.writeHead(404);
     res.end('Not found');
@@ -95,7 +93,7 @@ const server = https.createServer(sslOptions, (req, res) => {
 });
 
 /**
- * Create a WebSocket server that piggybacks on our HTTPS server.
+ * Create a WebSocket server (WSS) on top of our HTTPS server
  */
 const wss = new WebSocket.Server({ server });
 
@@ -122,11 +120,11 @@ wss.on('connection', (ws) => {
 
         if (role === 'teacher') {
           console.log(`Teacher joined: ${name}, id=${clientId}`);
-          teacherClient = { ws, id: clientId, name };
+          teacherClient = { ws, id: clientId, name, role: 'teacher' };
           ws.send(JSON.stringify({ type: 'joined', role, id: clientId }));
         } else {
           console.log(`Student joined: ${name}, id=${clientId}`);
-          students.push({ ws, id: clientId, name });
+          students.push({ ws, id: clientId, name, role: 'student' });
           ws.send(JSON.stringify({ type: 'joined', role, id: clientId }));
           // Notify teacher
           if (teacherClient && teacherClient.ws.readyState === WebSocket.OPEN) {
@@ -137,6 +135,9 @@ wss.on('connection', (ws) => {
             }));
           }
         }
+
+        // Broadcast updated attendants list to everyone
+        broadcastAttendantsList();
         break;
 
       case 'offer':
@@ -192,11 +193,11 @@ wss.on('connection', (ws) => {
 
   ws.on('close', () => {
     console.log(`Client disconnected: role=${role}, id=${clientId}`);
+    // If teacher disconnected
     if (teacherClient && teacherClient.id === clientId) {
-      // Teacher left
       teacherClient = null;
     } else {
-      // Student left
+      // Student disconnected
       students = students.filter(s => s.id !== clientId);
       if (teacherClient && teacherClient.ws.readyState === WebSocket.OPEN) {
         teacherClient.ws.send(JSON.stringify({
@@ -205,17 +206,43 @@ wss.on('connection', (ws) => {
         }));
       }
     }
+
+    // Broadcast updated attendants list to everyone
+    broadcastAttendantsList();
   });
 });
 
 /**
- * Helper: forward a message to a specific student by ID
+ * Forward a message to a particular Student by ID
  */
 function forwardToStudent(studentId, msgObj) {
   const student = students.find(s => s.id === studentId);
   if (student && student.ws.readyState === WebSocket.OPEN) {
     student.ws.send(JSON.stringify(msgObj));
   }
+}
+
+/**
+ * Broadcast the updated list of all attendants (Teacher + Students)
+ * to every connected socket.
+ */
+function broadcastAttendantsList() {
+  const all = [];
+  // Include teacher if present
+  if (teacherClient) {
+    all.push({ id: teacherClient.id, name: teacherClient.name, role: 'teacher' });
+  }
+  // Include all students
+  for (const s of students) {
+    all.push({ id: s.id, name: s.name, role: 'student' });
+  }
+
+  // Send { type: 'attendants-list', list: [...] } to everyone
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(JSON.stringify({ type: 'attendants-list', list: all }));
+    }
+  });
 }
 
 /**
@@ -229,7 +256,7 @@ function generateId() {
  * Start listening
  */
 server.listen(PORT, () => {
-  console.log(`HTTPS + WebSocket server running at https://jocarsa.com:${PORT}`);
+  console.log(`HTTPS + WebSocket server on https://jocarsa.com:${PORT}`);
   console.log('Press CTRL+C to stop.');
 });
 

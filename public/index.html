@@ -6,6 +6,30 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <div id="left-pane">
+    <!-- Chat on top -->
+    <div id="chat-container">
+      <div id="chat-messages"></div>
+      <div id="chat-input-container">
+        <input type="text" id="chat-input" placeholder="Type message...">
+        <button id="chat-send-btn">Send</button>
+      </div>
+    </div>
+
+    <!-- Attendants list at bottom -->
+    <div id="attendants-container">
+      <h3>Attendants</h3>
+      <div id="attendants-list"></div>
+    </div>
+  </div>
+
+  <!-- Right pane: Full screen button + video(s) -->
+  <div id="right-pane">
+    <button id="fullscreenBtn" title="Toggle Full Screen">[  ]</button>
+    <div id="video-container"><!-- Teacher or Student video(s) here --></div>
+  </div>
+
+  <!-- Login overlay -->
   <div id="loginOverlay">
     <div id="loginBox">
       <h2>Login</h2>
@@ -16,20 +40,6 @@
         <label><input type="radio" name="role" value="student">Student</label>
       </div>
       <button id="loginBtn">Login</button>
-    </div>
-  </div>
-
-  <div id="container">
-    <div id="chat-container">
-      <div id="chat-messages"></div>
-      <div id="chat-input-container">
-        <input type="text" id="chat-input" placeholder="Type message...">
-        <button id="chat-send-btn">Send</button>
-      </div>
-    </div>
-    <div id="video-container">
-      <!-- Teacher sees localVideo + any remote videos
-           Students see 1 remoteVideo (teacher's) -->
     </div>
   </div>
 
