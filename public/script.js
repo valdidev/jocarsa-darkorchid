@@ -330,7 +330,7 @@ function displayAttendants(list) {
   attendantsListDiv.innerHTML = '';
   list.forEach((person) => {
     const p = document.createElement('p');
-    p.textContent = \`\${person.role.toUpperCase()} – \${person.name}\`;
+    p.textContent = \`\${person.role.toUpperCase()} - \${person.name}\`;
     attendantsListDiv.appendChild(p);
   });
 }
