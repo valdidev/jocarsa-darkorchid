@@ -1,0 +1,13 @@
+{
+  "name": "webrtc-class",
+  "version": "1.0.0",
+  "description": "Teacher/Student WebRTC app",
+  "main": "server.js",
+  "author": "valdidev",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
